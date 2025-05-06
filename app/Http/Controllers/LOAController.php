@@ -39,46 +39,55 @@ class LoaController extends Controller
     /**
      * Method bantu untuk memilih model LOA berdasarkan role user.
      */
-    private function getLoaModel()
+    private function getLoaModel($type = null)
     {
         $user = Auth::user();
         if (!$user) {
             return null;
         }
-
-        switch ($user->role_id) {
-            case 1:
-                return Loa::class; // Tabel utama
-            case 2:
-                return LoaICODSA::class; // Tabel khusus ICODSA
-            case 3:
-                return LoaICICYTA::class; // Tabel khusus ICICYTA
-            default:
-                return Loa::class; // fallback
+    
+        // Jika admin biasa, tetap berdasarkan role
+        if ($user->role_id == 2) {
+            return LoaICODSA::class;
+        } elseif ($user->role_id == 3) {
+            return LoaICICYTA::class;
         }
+    
+        // Jika superadmin (role_id == 1), ambil dari URL (misalnya /icodsa/loas → icodsa)
+        if ($user->role_id == 1 && $type !== null) {
+            switch ($type) {
+                case 'icodsa':
+                    return LoaICODSA::class;
+                case 'icicyta':
+                    return LoaICICYTA::class;
+            }
+        }
+    
+        return null; // fallback jika tidak dikenali
     }
 
     
-    public function index()
+    public function index(Request $request)
     {
         try {
-            $loaModel = $this->getLoaModel();
+            $user = Auth::user();
+            $type = $request->segment(2);
+            $loaModel = $this->getLoaModel($type);
+    
             if (!$loaModel) {
                 return response()->json(['message' => 'Unauthorized'], 401);
             }
-
-            // Jika ingin membatasi "hanya data yang dibuat oleh user ini":
-            $data = $loaModel::where('created_by', Auth::id())->get();
-
-            // Jika superadmin boleh lihat semua data, admin pun boleh lihat data lain:
-            //$data = $loaModel::all();
-
+    
+            $data = ($user->role_id == 1)
+                ? $loaModel::all()
+                : $loaModel::where('created_by', $user->id)->get();
+    
             return response()->json($data, 200);
         } catch (\Exception $e) {
             Log::error('Error fetching Loa', ['error' => $e->getMessage()]);
             return response()->json(['message' => 'Terjadi kesalahan', 'error' => $e->getMessage()], 500);
         }
-    }
+    }  
 
     /**
      * Menyimpan LOA ke tabel yang sesuai dengan role
@@ -144,25 +153,34 @@ class LoaController extends Controller
     /**
      * Menampilkan detail LOA
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
-            $loaModel = $this->getLoaModel();
+            $user = Auth::user();
+            $type = $request->segment(2); // Ambil dari /{type}/loas/{id}
+            $loaModel = $this->getLoaModel($type);
+    
             if (!$loaModel) {
                 return response()->json(['message' => 'Unauthorized'], 401);
             }
-
+    
             $loa = $loaModel::find($id);
+    
             if (!$loa) {
                 return response()->json(['message' => 'LOA not found'], 404);
             }
-
+    
+            // Jika bukan superadmin, pastikan hanya bisa lihat data sendiri
+            if ($user->role_id !== 1 && $loa->created_by !== $user->id) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+    
             return response()->json($loa, 200);
         } catch (\Exception $e) {
             Log::error('Error retrieving LOA', ['error' => $e->getMessage()]);
             return response()->json(['message' => 'Terjadi kesalahan', 'error' => $e->getMessage()], 500);
         }
-    }
+    } 
 
     /**
      * Update LOA
