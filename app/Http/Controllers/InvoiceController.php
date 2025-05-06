@@ -183,19 +183,31 @@ class InvoiceController extends Controller
         }
     }
     
-    private function getPaymentModel()
+    private function getPaymentModel($type = null)
     {
         $user = Auth::user();
-        switch ($user->role_id) {
-            case 1:
-                return Payment::class;       
-            case 2:
-                return PaymentICODSA::class; 
-            case 3:
-                return PaymentICICYTA::class; 
-            default:
-                return Payment::class;
+        if (!$user) {
+            return null;
         }
+    
+        // Admin biasa langsung berdasarkan role
+        if ($user->role_id == 2) {
+            return PaymentICODSA::class;
+        } elseif ($user->role_id == 3) {
+            return PaymentICICYTA::class;
+        }
+    
+        // Superadmin pilih berdasarkan URL segment (misalnya 'icodsa')
+        if ($user->role_id == 1 && $type !== null) {
+            switch ($type) {
+                case 'icodsa':
+                    return PaymentICODSA::class;
+                case 'icicyta':
+                    return PaymentICICYTA::class;
+            }
+        }
+    
+        return null; // fallback jika tidak dikenali
     }
 
     // public function index()
@@ -210,23 +222,24 @@ class InvoiceController extends Controller
     //     }
     // }
 
-    public function index()
+    public function index(Request $request)
     {
         try {
-            $invoiceModel = $this->getInvoiceModel();
-            if (!$invoiceModel) {
+            $user = Auth::user();
+            $type = $request->segment(2); // ex: /api/icodsa/payments → 'icodsa'
+            $paymentModel = $this->getPaymentModel($type);
+    
+            if (!$paymentModel) {
                 return response()->json(['message' => 'Unauthorized'], 401);
             }
-
-            // Jika ingin membatasi "hanya data yang dibuat oleh user ini":
-            $data = $invoiceModel::where('created_by', Auth::id())->get();
-
-            // Jika superadmin boleh lihat semua data, admin pun boleh lihat data lain:
-            //$data = $invoiceModel::all();
-
+    
+            $data = ($user->role_id == 1)
+                ? $paymentModel::all()
+                : $paymentModel::where('created_by', $user->id)->get();
+    
             return response()->json($data, 200);
         } catch (\Exception $e) {
-            Log::error('Error fetching Loa', ['error' => $e->getMessage()]);
+            Log::error('Error fetching Payment', ['error' => $e->getMessage()]);
             return response()->json(['message' => 'Terjadi kesalahan', 'error' => $e->getMessage()], 500);
         }
     }
@@ -251,17 +264,31 @@ class InvoiceController extends Controller
     //     }
     // }
 
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
-            $invoiceModel = $this->getInvoiceModel();
-            $invoice = $invoiceModel::find($id);
-            if (!$invoice) {
-                return response()->json(['message' => 'Invoice not found'], 404);
+            $user = Auth::user();
+            $type = $request->segment(2); // ex: /api/icodsa/payments/5 → 'icodsa'
+            $paymentModel = $this->getPaymentModel($type);
+    
+            if (!$paymentModel) {
+                return response()->json(['message' => 'Unauthorized'], 401);
             }
-            return response()->json($invoice, 200);
+    
+            $payment = $paymentModel::find($id);
+    
+            if (!$payment) {
+                return response()->json(['message' => 'Payment not found'], 404);
+            }
+    
+            // Batasi akses jika bukan superadmin
+            if ($user->role_id !== 1 && $payment->created_by !== $user->id) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+    
+            return response()->json($payment, 200);
         } catch (\Exception $e) {
-            Log::error('Error retrieving Invoice', ['error' => $e->getMessage()]);
+            Log::error('Error retrieving Payment', ['error' => $e->getMessage()]);
             return response()->json(['message' => 'Terjadi kesalahan', 'error' => $e->getMessage()], 500);
         }
     }
