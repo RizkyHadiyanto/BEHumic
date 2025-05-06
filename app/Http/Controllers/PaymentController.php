@@ -53,48 +53,81 @@ class PaymentController extends Controller
         $this->middleware('auth:sanctum');
     }
 
-    private function getPaymentModel()
+    private function getPaymentModel($type = null)
     {
         $user = Auth::user();
-        switch ($user->role_id) {
-            case 1:
-                return Payment::class;
-            case 2:
-                return PaymentICODSA::class;
-            case 3:
-                return PaymentICICYTA::class;
-            default:
-                return Payment::class;
+        if (!$user) {
+            return null;
         }
-    }
+    
+        if ($user->role_id == 2) {
+            return PaymentICODSA::class;
+        } elseif ($user->role_id == 3) {
+            return PaymentICICYTA::class;
+        }
+    
+        // Jika superadmin (role_id == 1), gunakan segment URL
+        if ($user->role_id == 1 && $type !== null) {
+            switch ($type) {
+                case 'icodsa':
+                    return PaymentICODSA::class;
+                case 'icicyta':
+                    return PaymentICICYTA::class;
+            }
+        }
+    
+        return null; // fallback jika tidak dikenali
+    }  
 
-    public function index()
+    public function index(Request $request)
     {
         try {
-            $paymentModel = $this->getPaymentModel();
-            $payments = $paymentModel::all();
+            $user = Auth::user();
+            $type = $request->segment(2); // ex: /icodsa/payments
+            $paymentModel = $this->getPaymentModel($type);
+    
+            if (!$paymentModel) {
+                return response()->json(['message' => 'Unauthorized'], 401);
+            }
+    
+            $payments = ($user->role_id == 1)
+                ? $paymentModel::all()
+                : $paymentModel::where('created_by', $user->id)->get();
+    
             return response()->json($payments, 200);
         } catch (\Exception $e) {
             Log::error('Error retrieving Payments', ['error' => $e->getMessage()]);
             return response()->json(['message' => 'Terjadi kesalahan', 'error' => $e->getMessage()], 500);
         }
-    }
+    }  
 
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
-            $paymentModel = $this->getPaymentModel();
+            $user = Auth::user();
+            $type = $request->segment(2); // ex: /icodsa/payments/3
+            $paymentModel = $this->getPaymentModel($type);
+    
+            if (!$paymentModel) {
+                return response()->json(['message' => 'Unauthorized'], 401);
+            }
+    
             $payment = $paymentModel::find($id);
-
+    
             if (!$payment) {
                 return response()->json(['message' => 'Payment not found'], 404);
             }
+    
+            if ($user->role_id !== 1 && $payment->created_by !== $user->id) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+    
             return response()->json($payment, 200);
         } catch (\Exception $e) {
             Log::error('Error retrieving Payment', ['error' => $e->getMessage()]);
             return response()->json(['message' => 'Terjadi kesalahan', 'error' => $e->getMessage()], 500);
         }
-    }
+    }    
 
     public function update(Request $request, $id)
     {
